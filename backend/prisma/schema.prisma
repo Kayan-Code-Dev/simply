@@ -1,0 +1,258 @@
+datasource db {
+  provider = "mysql"
+  url      = env("DATABASE_URL")
+}
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+model User {
+  id                 Int             @id @default(autoincrement())
+  name               String
+  username           String?         @unique
+  email              String
+  password           String
+  role               String          @default("MARKETER") // ADMIN, MARKETER, STUDENT
+  rank               String          @default("DISTRIBUTOR") // DISTRIBUTOR, STARTER_LEADER, MANAGER_LEADER, SILVER_LEADER, GOLD, PLATINUM, RUBY, EMERALD, DIAMOND, BLUE_DIAMOND, BLACK_DIAMOND, LEGEND
+  sponsorId          Int?
+  sponsor            User?           @relation("SponsorRelation", fields: [sponsorId], references: [id])
+  referrals          User[]          @relation("SponsorRelation")
+  status             String          @default("INACTIVE") // ACTIVE, INACTIVE, SUSPENDED
+  isExempt           Boolean         @default(false) // permanent exemption for students
+  gracePeriodEndsAt  DateTime?       // 2 months grace period for marketers
+  joinedAt           DateTime        @default(now())
+  
+  // KYC fields
+  kycStatus          String          @default("NOT_SUBMITTED") // NOT_SUBMITTED, PENDING, APPROVED, REJECTED
+  kycFullName        String?
+  kycDocumentType    String?
+  kycDocumentNumber  String?
+  kycFrontImage      String?
+  kycBackImage       String?
+  kycSubmittedAt     DateTime?
+  
+  wallet             Wallet?
+  transactions       Transaction[]
+  commissions        Commission[]    @relation("RecipientRelation")
+  salesGenerated     Commission[]    @relation("BuyerRelation")
+  
+  ancestors          NetworkPath[]   @relation("DescendantRelation")
+  descendants        NetworkPath[]   @relation("AncestorRelation")
+  
+  challenges         UserChallenge[]
+  userPackages       UserPackage[]
+  
+  ownedEPins         EPin[]          @relation("OwnerRelation")
+  createdEPins       EPin[]          @relation("CreatorRelation")
+  usedEPins          EPin[]          @relation("UsedByRelation")
+  supportTickets     SupportTicket[]
+  ticketMessages     TicketMessage[]
+
+  @@index([sponsorId])
+}
+
+model Wallet {
+  id            Int     @id @default(autoincrement())
+  userId        Int     @unique
+  user          User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+  balance       Decimal @default(0.00) @db.Decimal(15, 2)
+  lockedBalance Decimal @default(0.00) @db.Decimal(15, 2)
+  totalEarned   Decimal @default(0.00) @db.Decimal(15, 2)
+  walletPin     String? // Hashed security PIN for financial operations
+}
+
+model NetworkPath {
+  ancestorId   Int
+  descendantId Int
+  depth        Int
+  
+  ancestor     User @relation("AncestorRelation", fields: [ancestorId], references: [id], onDelete: Cascade)
+  descendant   User @relation("DescendantRelation", fields: [descendantId], references: [id], onDelete: Cascade)
+
+  @@id([ancestorId, descendantId])
+  @@index([descendantId])
+  @@index([ancestorId])
+}
+
+model University {
+  id       Int       @id @default(autoincrement())
+  name     String
+  packages Package[]
+}
+
+model Package {
+  id           Int           @id @default(autoincrement())
+  name         String        // Bachelor, Master, Doctorate
+  description  String?       @db.Text
+  price        Decimal       @db.Decimal(15, 2)
+  imageUrl     String?
+  universityId Int
+  university   University    @relation(fields: [universityId], references: [id])
+  userPackages UserPackage[]
+}
+
+model UserPackage {
+  id              Int      @id @default(autoincrement())
+  userId          Int
+  user            User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  packageId       Int
+  package         Package  @relation(fields: [packageId], references: [id])
+  paidAmount      Decimal  @db.Decimal(15, 2)
+  totalPrice      Decimal  @db.Decimal(15, 2)
+  discountApplied Decimal  @default(0.00) @db.Decimal(15, 2)
+  status          String   @default("ACTIVE") // ACTIVE, FULLY_PAID
+  createdAt       DateTime @default(now())
+
+  @@index([userId])
+  @@index([packageId])
+}
+
+model Commission {
+  id        Int      @id @default(autoincrement())
+  userId    Int      // Beneficiary of commission
+  user      User     @relation("RecipientRelation", fields: [userId], references: [id], onDelete: Cascade)
+  buyerId   Int      // Student purchase that triggered this
+  buyer     User     @relation("BuyerRelation", fields: [buyerId], references: [id], onDelete: Cascade)
+  amount    Decimal  @db.Decimal(15, 2)
+  type      String   // DIRECT, GENERATION, POOL
+  level     Int?     // Generation level (1-20)
+  createdAt DateTime @default(now())
+
+  @@index([userId])
+  @@index([buyerId])
+}
+
+model Transaction {
+  id            Int      @id @default(autoincrement())
+  userId        Int
+  user          User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  amount        Decimal  @db.Decimal(15, 2)
+  type          String   // DEPOSIT, WITHDRAWAL, TRANSFER, ACTIVATION_FEE, PACKAGE_PURCHASE
+  status        String   @default("PENDING") // PENDING, COMPLETED, FAILED
+  paymentMethod String   // STRIPE, PAYPAL, BANK_TRANSFER
+  details       String?  @db.Text // JSON details or proof of bank transfer file path
+  createdAt     DateTime @default(now())
+
+  @@index([userId])
+}
+
+model PoolContribution {
+  id        Int      @id @default(autoincrement())
+  amount    Decimal  @db.Decimal(15, 2) // $33
+  poolType  String   // RUBY, DIAMOND, BLACK_DIAMOND
+  status    String   @default("PENDING") // PENDING, DISTRIBUTED
+  createdAt DateTime @default(now())
+}
+
+model Challenge {
+  id               Int             @id @default(autoincrement())
+  title            String
+  description      String?         @db.Text
+  targetSales      Int
+  rewardType       String          // TRAVEL, BONUS
+  performanceLevel Int             // 40, 60, 80 (Max leg percentage limit)
+  startDate        DateTime
+  endDate          DateTime
+  isActive         Boolean         @default(true)
+  imageUrl         String?         @db.VarChar(255)
+  rewardAmount     Float           @default(0.0)
+  requiredDirects  Int             @default(0)
+  directsType      String          @default("ANY") // ANY, MARKETER, STUDENT
+  targetRevenue    Float           @default(0.0)
+  userChallenges   UserChallenge[]
+}
+
+model UserChallenge {
+  id            Int       @id @default(autoincrement())
+  userId        Int
+  user          User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  challengeId   Int
+  challenge     Challenge @relation(fields: [challengeId], references: [id], onDelete: Cascade)
+  progressSales Int       @default(0)
+  status        String    @default("PENDING") // PENDING, ACHIEVED, FAILED
+  joinedAt      DateTime  @default(now())
+
+  @@index([userId])
+  @@index([challengeId])
+}
+
+model News {
+  id         Int      @id @default(autoincrement())
+  title      String
+  content    String   @db.Text
+  category   String   // NEWS, ARTICLES, VIDEOS, IMAGES, PDF
+  imageUrl   String?  // cover image path
+  fileUrl    String?  // downloadable file path (image, video, pdf)
+  views      Int      @default(0)
+  isFeatured Boolean  @default(false)
+  createdAt  DateTime @default(now())
+}
+
+model EPin {
+  id          Int      @id @default(autoincrement())
+  code        String   @unique
+  amount      Decimal  @db.Decimal(15, 2)
+  status      String   @default("ACTIVE") // ACTIVE, USED
+  
+  ownerId     Int
+  owner       User     @relation("OwnerRelation", fields: [ownerId], references: [id], onDelete: Cascade)
+  
+  creatorId   Int
+  creator     User     @relation("CreatorRelation", fields: [creatorId], references: [id], onDelete: Cascade)
+  
+  usedById    Int?
+  usedBy      User?    @relation("UsedByRelation", fields: [usedById], references: [id], onDelete: SetNull)
+  
+  usedAt      DateTime?
+  createdAt   DateTime @default(now())
+
+  @@index([ownerId])
+  @@index([creatorId])
+  @@index([usedById])
+}
+
+model SupportTicket {
+  id          Int             @id @default(autoincrement())
+  ticketId    String          @unique // e.g. TKT-12345
+  subject     String
+  status      String          @default("PENDING") // PENDING, RESOLVED
+  userId      Int
+  user        User            @relation(fields: [userId], references: [id], onDelete: Cascade)
+  messages    TicketMessage[]
+  createdAt   DateTime        @default(now())
+
+  @@index([userId])
+}
+
+model TicketMessage {
+  id        Int           @id @default(autoincrement())
+  ticketId  Int
+  ticket    SupportTicket @relation(fields: [ticketId], references: [id], onDelete: Cascade)
+  senderId  Int
+  sender    User          @relation(fields: [senderId], references: [id], onDelete: Cascade)
+  message   String        @db.Text
+  createdAt DateTime      @default(now())
+
+  @@index([ticketId])
+  @@index([senderId])
+}
+
+model SystemSetting {
+  id        Int      @id @default(autoincrement())
+  key       String   @unique
+  value     String   @db.Text
+  updatedAt DateTime @updatedAt
+}
+
+model EmailTemplate {
+  id        Int      @id @default(autoincrement())
+  slug      String   @unique
+  name      String
+  subject   String
+  htmlBody  String   @db.Text
+  variables String   @db.Text // JSON string list of placeholders like ["name", "email"]
+  isActive  Boolean  @default(true)
+  updatedAt DateTime @updatedAt
+}
+
